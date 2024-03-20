@@ -11,12 +11,18 @@ class MyBehaviorDelegate extends WatchUi.BehaviorDelegate {
 
         menu.addItem("Next song", :nextSong);
         menu.addItem("Play/Pause", :playPause);
-        menu.addItem("Volume up", :volumeUp);
-        menu.addItem("Volume down", :volumeDown);
         menu.addItem("Like/Unlike song", :likeUnlikeSong);
-        
+        menu.addItem("Update UI", :updateUi);
+
         WatchUi.pushView(menu, new MyMenuDelegate(), SLIDE_IMMEDIATE);
 
         return true;
     }
+
+    function onTap(clickEvent) {
+        var listener = new MyConnectionListener();
+        Communications.transmit("nextSong", null, listener);
+        return true;
+    }
+
 }

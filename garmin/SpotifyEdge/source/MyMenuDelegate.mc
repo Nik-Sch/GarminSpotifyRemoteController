@@ -14,12 +14,10 @@ class MyMenuDelegate extends WatchUi.MenuInputDelegate {
             Communications.transmit("nextSong", null, listener);
         } else if(item == :playPause) {
             Communications.transmit("playPause", null, listener);
-        } else if(item == :volumeUp) {
-            Communications.transmit("volumeUp", null, listener);
-        } else if(item == :volumeDown) {
-            Communications.transmit("volumeDown", null, listener);
         } else if(item == :likeUnlikeSong) {
             Communications.transmit("likeUnlikeSong", null, listener);
+        } else if(item == :updateUi) {
+            Communications.transmit("sendPlayerInfo", null, listener);
         }
     }
 }

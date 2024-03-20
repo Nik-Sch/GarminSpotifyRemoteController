@@ -1,0 +1,7 @@
+/gen
+/mir
+/internal-mir
+developer_key
+*.prg
+*.prg.debug.xml
+.env

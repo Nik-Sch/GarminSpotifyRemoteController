@@ -1,51 +1,54 @@
 package app.krakentom.garminspotifyremotecontroller.services
 
+import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.ContentValues.TAG
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.ContextCompat.getSystemService
 import app.krakentom.garminspotifyremotecontroller.R
 import app.krakentom.garminspotifyremotecontroller.activities.MainActivity
 import app.krakentom.garminspotifyremotecontroller.models.PlayerInfo
 import com.garmin.android.connectiq.ConnectIQ
 import com.garmin.android.connectiq.IQApp
 import com.garmin.android.connectiq.IQDevice
-import com.garmin.android.connectiq.exception.InvalidStateException
-import com.garmin.android.connectiq.exception.ServiceUnavailableException
 import com.spotify.android.appremote.api.SpotifyAppRemote
-import com.spotify.android.appremote.api.error.SpotifyDisconnectedException
 import com.spotify.protocol.client.Subscription
 import com.spotify.protocol.types.PlayerState
-import com.spotify.protocol.types.VolumeState
+
 
 class MyService : Service() {
 
     private val garminConnectedDevices = mutableListOf<IQDevice>()
 
-    private val CHANNEL_ID = "Garmin Spotify Remote Controller"
-    private val GARMIN_WATCH_ID = "TODO YOUR WATCH ID"
 
     private lateinit var garminConnectIQ: ConnectIQ
-    private lateinit var garminApp: IQApp
+    private var garminApp = IQApp(GARMIN_WATCH_ID)
 
     private val spotifyErrorCallback = { throwable: Throwable -> spotifyLogError(throwable) }
     private var spotifyPlayerStateSubscription: Subscription<PlayerState>? = null
-    private var spotifyVolumeStateSubscription: Subscription<VolumeState>? = null
 
-    private val _playerInfo: PlayerInfo = PlayerInfo()
+    private val playerInfo: PlayerInfo = PlayerInfo()
 
     companion object {
         var spotifyAppRemote: SpotifyAppRemote? = null
+        const val INTENT_ACTION = "UPDATE_UI_INTENT"
 
         fun startService(context: Context) {
+            val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            for (service in manager.getRunningServices(Int.MAX_VALUE)) {
+                if (MyService::class.java.name.equals(service.service.className)) {
+                    Toast.makeText(context, "Garmin Spotify Service is already running", Toast.LENGTH_SHORT).show()
+                    return
+                }
+            }
             val startIntent = Intent(context, MyService::class.java)
             ContextCompat.startForegroundService(context, startIntent)
         }
@@ -54,23 +57,25 @@ class MyService : Service() {
             val stopIntent = Intent(context, MyService::class.java)
             context.stopService(stopIntent)
         }
+
+        private const val CHANNEL_ID = "Garmin Spotify Remote Controller"
+        private const val GARMIN_WATCH_ID = "TODO YOUR WATCH ID"
+
+    }
+
+    private fun setText(text: String) {
+        val intent = Intent(INTENT_ACTION)
+        intent.putExtra("value", text)
+        sendBroadcast(intent)
     }
 
     override fun onCreate() {
         super.onCreate()
-        spotifyPlayerStateSubscription =
-            spotifyCancelAndResetSubscription(spotifyPlayerStateSubscription)
         spotifyPlayerStateSubscription = spotifyAssertAppRemoteConnected()
-            .playerApi
-            .subscribeToPlayerState()
-            .setEventCallback(spotifyPlayerStateEventCallback)
+            ?.playerApi
+            ?.subscribeToPlayerState()
+            ?.setEventCallback(spotifyPlayerStateEventCallback)
 
-        spotifyVolumeStateSubscription =
-            spotifyCancelAndResetSubscription(spotifyVolumeStateSubscription)
-        spotifyVolumeStateSubscription = spotifyAssertAppRemoteConnected()
-            .connectApi
-            .subscribeToVolumeState()
-            .setEventCallback(spotifyVolumeStateEventCallback)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -78,7 +83,7 @@ class MyService : Service() {
         val notificationIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this,
-            0, notificationIntent, 0
+            0, notificationIntent, PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Garmin Spotify Remote Controller")
@@ -87,10 +92,13 @@ class MyService : Service() {
             .build()
         startForeground(1, notification)
 
-        garminApp = IQApp(GARMIN_WATCH_ID)
-        garminConnectIQ = ConnectIQ.getInstance(this, ConnectIQ.IQConnectType.WIRELESS)
-        garminConnectIQ.initialize(this, true, garminConnectIQListener)
-
+        try {
+            garminConnectIQ = ConnectIQ.getInstance(this, ConnectIQ.IQConnectType.WIRELESS)
+            garminConnectIQ.initialize(this, true, garminConnectIQListener)
+            setText("Garmin started")
+        } catch (e: Exception) {
+            setText("startCommand: $e")
+        }
         return START_NOT_STICKY
     }
 
@@ -100,6 +108,7 @@ class MyService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        setText("Garmin stopped")
         garminReleaseConnectIQSdk()
     }
 
@@ -110,29 +119,30 @@ class MyService : Service() {
                 NotificationManager.IMPORTANCE_DEFAULT
             )
             val manager = getSystemService(NotificationManager::class.java)
-            manager!!.createNotificationChannel(serviceChannel)
+            manager?.createNotificationChannel(serviceChannel)
         }
     }
 
     private val garminConnectIQListener: ConnectIQ.ConnectIQListener =
         object : ConnectIQ.ConnectIQListener {
             override fun onInitializeError(errStatus: ConnectIQ.IQSdkErrorStatus) {
-                Log.e(TAG, "Garmin SDK initialization error!")
+                setText( "Garmin SDK initialization error!")
             }
 
             override fun onSdkReady() {
-                Log.i(TAG, "Garmin SDK ready")
+                setText("Garmin SDK ready")
                 garminLoadDevices()
             }
 
             override fun onSdkShutDown() {
-                Log.i(TAG, "Garmin SDK shut down")
+                setText("Garmin SDK shut down")
             }
         }
 
     fun garminLoadDevices() {
         try {
             val devices = garminConnectIQ.knownDevices ?: listOf()
+            setText("known devices: " + devices.joinToString(", ") { it.friendlyName })
 
             garminConnectedDevices.clear()
             devices.forEach {
@@ -141,56 +151,50 @@ class MyService : Service() {
                 garminConnectIQ.registerForDeviceEvents(it) { device, status ->
                     if (status == IQDevice.IQDeviceStatus.CONNECTED) {
                         garminListenByMyAppEvents(device)
+                        setText("${device.friendlyName} connected, listing for events")
+                        sendPlayerInfoToGarmin()
                     }
                 }
-
                 garminGetAppStatus(it)
             }
-        } catch (exception: InvalidStateException) {
-            Log.e(TAG, "", exception)
-        } catch (exception: ServiceUnavailableException) {
-            Log.e(TAG, "", exception)
+        } catch (e: Exception) {
+            setText("garmin load devices: $e")
         }
     }
 
     private fun garminListenByMyAppEvents(device: IQDevice) {
         try {
             garminConnectIQ.registerForAppEvents(device, garminApp) { _, _, message, _ ->
-                val builder = StringBuilder()
-                if (message.size > 0) {
-                    for (o in message) {
-                        builder.append(o.toString())
-                        builder.append("\r\n")
-                    }
-                }
-
-                val command = builder.toString().removeSuffix("\r\n")
-
-                when (command) {
-                    "playPause" -> {
-                        spotifyPause()
+                try {
+                    val builder = StringBuilder()
+                    if (message.size > 0) {
+                        for (o in message) {
+                            builder.append(o.toString())
+                            builder.append("\r\n")
+                        }
                     }
 
-                    "nextSong" -> {
-                        spotifyNext()
+                    val command = builder.toString().removeSuffix("\r\n")
+                    setText("received command from garmin '$command'")
+                    when (command) {
+                        "playPause" -> {
+                            spotifyPause()
+                        }
+                        "nextSong" -> {
+                            spotifyNext()
+                        }
+                        "likeUnlikeSong" -> {
+                            spotifyLikeUnlikeSong()
+                        }
                     }
-
-                    "volumeUp" -> {
-                        spotifyVolumeUp()
-                    }
-
-                    "volumeDown" -> {
-                        spotifyVolumeDown()
-                    }
-
-                    "likeUnlikeSong" -> {
-                        spotifyLikeUnlikeSong()
-                    }
+                    sendPlayerInfoToGarmin()
+                } catch (e: Exception) {
+                    setText("garmin message: $e")
                 }
 
             }
-        } catch (exception: InvalidStateException) {
-            Log.e(TAG, "", exception)
+        } catch (e: Exception) {
+            setText("register app events: $e")
         }
     }
 
@@ -198,22 +202,22 @@ class MyService : Service() {
         try {
             garminConnectIQ.unregisterAllForEvents()
             garminConnectIQ.shutdown(this)
-        } catch (exception: InvalidStateException) {
-            Log.e(TAG, "", exception)
+        } catch (e: Exception) {
+            setText("garmin release: $e")
         }
     }
 
-    private fun spotifyAssertAppRemoteConnected(): SpotifyAppRemote {
+    private fun spotifyAssertAppRemoteConnected(): SpotifyAppRemote? {
         spotifyAppRemote?.let {
             if (it.isConnected) {
                 return it
             }
         }
-        throw SpotifyDisconnectedException()
+        return null
     }
 
     private fun spotifyPause() {
-        spotifyAssertAppRemoteConnected().let {
+        spotifyAssertAppRemoteConnected()?.let {
             it.playerApi
                 .playerState
                 .setResultCallback { playerState ->
@@ -232,27 +236,13 @@ class MyService : Service() {
 
     private fun spotifyNext() {
         spotifyAssertAppRemoteConnected()
-            .playerApi
-            .skipNext()
-            .setErrorCallback(spotifyErrorCallback)
-    }
-
-    private fun spotifyVolumeUp() {
-        spotifyAssertAppRemoteConnected()
-            .connectApi
-            .connectIncreaseVolume()
-            .setErrorCallback(spotifyErrorCallback)
-    }
-
-    private fun spotifyVolumeDown() {
-        spotifyAssertAppRemoteConnected()
-            .connectApi
-            .connectDecreaseVolume()
-            .setErrorCallback(spotifyErrorCallback)
+            ?.playerApi
+            ?.skipNext()
+            ?.setErrorCallback(spotifyErrorCallback)
     }
 
     private fun spotifyLikeUnlikeSong() {
-        spotifyAssertAppRemoteConnected().let {
+        spotifyAssertAppRemoteConnected()?.let {
             it.playerApi
                 .playerState
                 .setResultCallback { playerState ->
@@ -274,38 +264,31 @@ class MyService : Service() {
 
     private val spotifyPlayerStateEventCallback =
         Subscription.EventCallback<PlayerState> { playerState ->
-            spotifyAssertAppRemoteConnected().let {
+            spotifyAssertAppRemoteConnected()?.let {
                 it.userApi.getLibraryState(playerState.track.uri)
                     .setResultCallback { libraryState ->
 
-                        _playerInfo.song = playerState.track.name
-                        _playerInfo.artist = playerState.track.artist.name
-                        _playerInfo.duration = playerState.track.duration
-                        _playerInfo.isInLibrary = libraryState.isAdded
+                        playerInfo.song = playerState.track.name
+                        playerInfo.artist = playerState.track.artist.name
+                        playerInfo.duration = playerState.track.duration
+                        playerInfo.isInLibrary = libraryState.isAdded
 
                         sendPlayerInfoToGarmin()
                     }
             }
         }
 
-    private val spotifyVolumeStateEventCallback =
-        Subscription.EventCallback<VolumeState> { volumeState ->
-
-            _playerInfo.volume = volumeState.mVolume
-
-            sendPlayerInfoToGarmin()
-        }
-
     private fun sendPlayerInfoToGarmin() {
+//        setText(playerInfo.toMap().toString())
         garminConnectedDevices.forEach {
             try {
                 garminConnectIQ.sendMessage(
                     it,
                     garminApp,
-                    _playerInfo.toMap()
-                ) { _, _, status -> }
+                    playerInfo.toMap()
+                ) { _, _, _ -> }
             } catch (e: Exception) {
-                Log.e(TAG, "", e)
+                setText("send player info: $e")
             }
         }
     }
@@ -331,11 +314,11 @@ class MyService : Service() {
                 }
             })
         } catch (e: Exception) {
-            Log.e(TAG, "", e)
+            setText("garmin app status: $e")
         }
     }
 
-    private fun spotifyLogError(throwable: Throwable) {
-        Log.e(TAG, "", throwable)
+    private fun spotifyLogError(e: Throwable) {
+        setText("spotify error: $e")
     }
 }
